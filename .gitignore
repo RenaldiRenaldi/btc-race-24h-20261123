@@ -1,5 +1,6 @@
 .DS_Store
 node_modules/
 *.log
-# local grade artifacts
+# local grading output, never part of the entry
 .makefun-local/
+.tmp-grade/

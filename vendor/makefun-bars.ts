@@ -1,5 +1,6 @@
 import { createInterface } from 'node:readline';
 
+// Small wire adapter kept in-repo so the bot has no install or network dependency.
 export type Bar = { symbol: string; t: number; o: string; h: string; l: string; c: string; v: string | null; o_depth: string[]; c_depth: string[] };
 export type Batch = { type: 'batch'; seq: number; t: number; bars: Bar[]; fills: unknown[]; account: Account };
 export type Account = { cash_quote_units: string; equity_quote_units: string; positions: Position[] };
@@ -22,7 +23,7 @@ export class BarsState {
   positions = new Map<string, { qty: bigint; cost: bigint }>();
   private next = 1;
   constructor(h: Hello) { this.hello = h; this.cash = BigInt(h.capital.quote_units); this.equity = this.cash; }
-  applyBatch(b: Batch) {
+  applyBatch(b: Batch): void {
     this.seq = b.seq;
     this.warmingUp = false;
     for (const bar of b.bars) this.latest.set(bar.symbol, bar);
@@ -30,9 +31,12 @@ export class BarsState {
     this.cash = BigInt(b.account.cash_quote_units);
     this.equity = BigInt(b.account.equity_quote_units);
     this.positions.clear();
-    for (const position of b.account.positions) this.positions.set(position.symbol, { qty: BigInt(position.qty), cost: BigInt(position.cost_quote_units) });
+    for (const position of b.account.positions) {
+      this.positions.set(position.symbol, { qty: BigInt(position.qty), cost: BigInt(position.cost_quote_units) });
+    }
   }
   close(symbol: string): bigint | null { const bar = this.latest.get(symbol); return bar === undefined ? null : BigInt(bar.c); }
+  latestBar(symbol: string): Bar | null { return this.latest.get(symbol) ?? null; }
   value(symbol: string, qty: bigint): bigint {
     const spec = this.hello.symbols.find((item) => item.symbol === symbol);
     const price = this.close(symbol);

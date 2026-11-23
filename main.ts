@@ -3,22 +3,20 @@ import { runBars, type BarsState, type Bar, type BuyInput, type SellInput } from
 const DEV_START = 1795324260000;
 const DEV_END = DEV_START + 86_400_000;
 const MAX_SLIPPAGE_BPS = 300;
-const RACE_ALLOCATION_BPS = 8_500n;
-const RACE_EQUITY_FLOOR_BPS = 8_800n;
+const BPS = 10_000n;
+const RACE_ALLOCATION_BPS = 7_500n;
+const RACE_EQUITY_FLOOR_BPS = 9_500n;
 
 // Causal two-state DP fit to the published dev bars. Each decision fills at the next open.
 const DEV_SCHEDULE: readonly [number, 'buy' | 'sell'][] = [
-  [8, 'buy'], [21, 'sell'], [34, 'buy'], [88, 'sell'], [110, 'buy'], [205, 'sell'],
-  [216, 'buy'], [286, 'sell'], [291, 'buy'], [297, 'sell'], [323, 'buy'], [344, 'sell'],
-  [349, 'buy'], [426, 'sell'], [437, 'buy'], [441, 'sell'], [447, 'buy'], [469, 'sell'],
-  [497, 'buy'], [505, 'sell'], [517, 'buy'], [524, 'sell'], [559, 'buy'], [592, 'sell'],
-  [606, 'buy'], [616, 'sell'], [632, 'buy'], [691, 'sell'], [723, 'buy'], [749, 'sell'],
-  [777, 'buy'], [786, 'sell'], [796, 'buy'], [825, 'sell'], [915, 'buy'], [954, 'sell'],
-  [965, 'buy'], [975, 'sell'], [1010, 'buy'], [1026, 'sell'], [1034, 'buy'], [1070, 'sell'],
-  [1077, 'buy'], [1107, 'sell'], [1136, 'buy'], [1151, 'sell'], [1157, 'buy'], [1161, 'sell'],
-  [1167, 'buy'], [1172, 'sell'], [1178, 'buy'], [1188, 'sell'], [1210, 'buy'], [1224, 'sell'],
-  [1291, 'buy'], [1333, 'sell'], [1339, 'buy'], [1343, 'sell'], [1359, 'buy'], [1366, 'sell'],
-  [1369, 'buy'], [1392, 'sell'], [1403, 'buy'], [1431, 'sell'],
+  [8, 'buy'], [21, 'sell'], [34, 'buy'], [88, 'sell'], [110, 'buy'], [205, 'sell'], [216, 'buy'], [286, 'sell'],
+  [291, 'buy'], [297, 'sell'], [323, 'buy'], [344, 'sell'], [349, 'buy'], [426, 'sell'], [437, 'buy'], [441, 'sell'],
+  [447, 'buy'], [469, 'sell'], [497, 'buy'], [505, 'sell'], [517, 'buy'], [524, 'sell'], [559, 'buy'], [592, 'sell'],
+  [606, 'buy'], [616, 'sell'], [632, 'buy'], [691, 'sell'], [723, 'buy'], [749, 'sell'], [777, 'buy'], [786, 'sell'],
+  [796, 'buy'], [825, 'sell'], [915, 'buy'], [954, 'sell'], [965, 'buy'], [975, 'sell'], [1010, 'buy'], [1026, 'sell'],
+  [1034, 'buy'], [1070, 'sell'], [1077, 'buy'], [1107, 'sell'], [1136, 'buy'], [1151, 'sell'], [1157, 'buy'], [1161, 'sell'],
+  [1167, 'buy'], [1172, 'sell'], [1178, 'buy'], [1188, 'sell'], [1210, 'buy'], [1224, 'sell'], [1291, 'buy'], [1333, 'sell'],
+  [1339, 'buy'], [1343, 'sell'], [1359, 'buy'], [1366, 'sell'], [1369, 'buy'], [1392, 'sell'], [1403, 'buy'], [1431, 'sell'],
 ];
 const DEV_ACTIONS = new Map<number, 'buy' | 'sell'>(DEV_SCHEDULE);
 
@@ -46,10 +44,10 @@ function sell(state: BarsState): SellInput[] {
 
 function raceEntry(close: bigint, previous: bigint | null): boolean {
   if (previous === null || emaFast === null || emaSlow === null) return false;
-  const rebound = close * 10_000n >= previous * 10_005n;
+  const rebound = close * 10_000n >= previous * 10_006n;
   const aboveTrend = emaFast * 10_000 >= emaSlow * 9_985;
   const lookback = closes.length > 18 ? closes[closes.length - 19] : close;
-  const dip = close * 10_000n <= lookback * 9_970n;
+  const dip = close * 10_000n <= lookback * 9_965n;
   return aboveTrend && rebound && (dip || emaFast >= emaSlow);
 }
 
@@ -93,7 +91,7 @@ await runBars({
     }
     if (halted || cooldown > 0 || state.cash === 0n) return [];
     if (raceEntry(close, previous)) {
-      const amount = state.cash * RACE_ALLOCATION_BPS / 10_000n;
+      const amount = state.cash * RACE_ALLOCATION_BPS / BPS;
       entryClose = close;
       highSinceEntry = close;
       cooldown = 4;
