@@ -35,7 +35,10 @@ export class BarsState {
       this.positions.set(position.symbol, { qty: BigInt(position.qty), cost: BigInt(position.cost_quote_units) });
     }
   }
-  close(symbol: string): bigint | null { const bar = this.latest.get(symbol); return bar === undefined ? null : BigInt(bar.c); }
+  close(symbol: string): bigint | null {
+    const bar = this.latest.get(symbol);
+    return bar === undefined ? null : BigInt(bar.c);
+  }
   latestBar(symbol: string): Bar | null { return this.latest.get(symbol) ?? null; }
   value(symbol: string, qty: bigint): bigint {
     const spec = this.hello.symbols.find((item) => item.symbol === symbol);
@@ -44,9 +47,9 @@ export class BarsState {
     return qty * price * 10n ** BigInt(this.hello.capital.quote_scale) / 10n ** BigInt(spec.qty_scale + spec.price_scale);
   }
   toOrders(inputs: OrderInput[] | null | undefined): WireOrder[] {
-    const orders = inputs ?? [];
-    if (orders.length > this.hello.caps.max_orders_per_bar) throw new Error('too many orders');
-    return orders.map((order): WireOrder => {
+    const requested = inputs ?? [];
+    if (requested.length > this.hello.caps.max_orders_per_bar) throw new Error('too many orders');
+    return requested.map((order): WireOrder => {
       const client_id = order.client_id ?? `o${this.next++}`;
       return order.side === 'buy'
         ? { side: 'buy', client_id, symbol: order.symbol, notional_quote_units: String(order.notional_quote_units), max_slippage_bps: order.max_slippage_bps }

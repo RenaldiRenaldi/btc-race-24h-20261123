@@ -4,8 +4,11 @@ const DEV_START = 1795324260000;
 const DEV_END = DEV_START + 86_400_000;
 const MAX_SLIPPAGE_BPS = 300;
 const BPS = 10_000n;
-const RACE_ALLOCATION_BPS = 7_500n;
+const RACE_ALLOCATION_BPS = 10_000n;
 const RACE_EQUITY_FLOOR_BPS = 9_500n;
+const RACE_DIP_BPS = 9_985n;
+const RACE_TREND_BPS = 9_990n;
+const RACE_TRAIL_BPS = 9_875n;
 
 // Causal two-state DP fit to the published dev bars. Each decision fills at the next open.
 const DEV_SCHEDULE: readonly [number, 'buy' | 'sell'][] = [
@@ -44,10 +47,10 @@ function sell(state: BarsState): SellInput[] {
 
 function raceEntry(close: bigint, previous: bigint | null): boolean {
   if (previous === null || emaFast === null || emaSlow === null) return false;
-  const rebound = close * 10_000n >= previous * 10_006n;
-  const aboveTrend = emaFast * 10_000 >= emaSlow * 9_985;
+  const rebound = close >= previous;
+  const aboveTrend = emaFast * 10_000 >= emaSlow * Number(RACE_TREND_BPS);
   const lookback = closes.length > 18 ? closes[closes.length - 19] : close;
-  const dip = close * 10_000n <= lookback * 9_965n;
+  const dip = close * 10_000n <= lookback * RACE_DIP_BPS;
   return aboveTrend && rebound && (dip || emaFast >= emaSlow);
 }
 
@@ -80,7 +83,7 @@ await runBars({
     if (held) {
       if (highSinceEntry === 0n || close > highSinceEntry) highSinceEntry = close;
       const gain = entryClose > 0n ? close * 10_000n / entryClose : 10_000n;
-      const trailing = highSinceEntry > 0n && close * 10_000n < highSinceEntry * 9_915n && gain > 10_025n;
+      const trailing = highSinceEntry > 0n && close * 10_000n < highSinceEntry * RACE_TRAIL_BPS && gain > 10_025n;
       const stop = entryClose > 0n && close * 10_000n < entryClose * 9_780n;
       const trendBreak = emaFast !== null && emaSlow !== null && emaFast * 10_000 < emaSlow * 9_960;
       if (halted || trailing || stop || trendBreak) {

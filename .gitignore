@@ -4,3 +4,5 @@ node_modules/
 # local grading output, never part of the entry
 .makefun-local/
 .tmp-grade/
+# optional local race-only experiments
+.race-scratch/
