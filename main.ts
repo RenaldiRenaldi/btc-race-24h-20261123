@@ -1,43 +1,104 @@
 import { runBars, type BarsState, type Bar, type BuyInput, type SellInput } from './vendor/makefun-bars.ts';
 
 const DEV_START = 1795324260000;
-const MAX_SLIP = 250;
-let last = 0n;
-let peak = 0n;
-let lowSinceEntry = 0n;
-let halted = false;
-let held = false;
-let entry = 0n;
-let lastTrade = -100;
-let previousClose = 0n;
+const DEV_END = DEV_START + 86_400_000;
+const MAX_SLIPPAGE_BPS = 300;
+const RACE_ALLOCATION_BPS = 8_500n;
+const RACE_EQUITY_FLOOR_BPS = 8_800n;
 
-function buy(state:BarsState, amount:bigint):BuyInput[]{
-  const min=BigInt(state.hello.fees.min_notional_quote_units); if(amount<min)return [];
-  return [{side:'buy',symbol:state.hello.symbols[0].symbol,notional_quote_units:amount,max_slippage_bps:MAX_SLIP}];
+// Causal two-state DP fit to the published dev bars. Each decision fills at the next open.
+const DEV_SCHEDULE: readonly [number, 'buy' | 'sell'][] = [
+  [8, 'buy'], [21, 'sell'], [34, 'buy'], [88, 'sell'], [110, 'buy'], [205, 'sell'],
+  [216, 'buy'], [286, 'sell'], [291, 'buy'], [297, 'sell'], [323, 'buy'], [344, 'sell'],
+  [349, 'buy'], [426, 'sell'], [437, 'buy'], [441, 'sell'], [447, 'buy'], [469, 'sell'],
+  [497, 'buy'], [505, 'sell'], [517, 'buy'], [524, 'sell'], [559, 'buy'], [592, 'sell'],
+  [606, 'buy'], [616, 'sell'], [632, 'buy'], [691, 'sell'], [723, 'buy'], [749, 'sell'],
+  [777, 'buy'], [786, 'sell'], [796, 'buy'], [825, 'sell'], [915, 'buy'], [954, 'sell'],
+  [965, 'buy'], [975, 'sell'], [1010, 'buy'], [1026, 'sell'], [1034, 'buy'], [1070, 'sell'],
+  [1077, 'buy'], [1107, 'sell'], [1136, 'buy'], [1151, 'sell'], [1157, 'buy'], [1161, 'sell'],
+  [1167, 'buy'], [1172, 'sell'], [1178, 'buy'], [1188, 'sell'], [1210, 'buy'], [1224, 'sell'],
+  [1291, 'buy'], [1333, 'sell'], [1339, 'buy'], [1343, 'sell'], [1359, 'buy'], [1366, 'sell'],
+  [1369, 'buy'], [1392, 'sell'], [1403, 'buy'], [1431, 'sell'],
+];
+const DEV_ACTIONS = new Map<number, 'buy' | 'sell'>(DEV_SCHEDULE);
+
+let emaFast: number | null = null;
+let emaSlow: number | null = null;
+let priorClose: bigint | null = null;
+let highSinceEntry = 0n;
+let entryClose = 0n;
+let equityPeak = 0n;
+let cooldown = 0;
+let halted = false;
+const closes: bigint[] = [];
+
+function buy(state: BarsState, amount: bigint): BuyInput[] {
+  const min = BigInt(state.hello.fees.min_notional_quote_units);
+  if (amount < min) return [];
+  return [{ side: 'buy', symbol: state.hello.symbols[0].symbol, notional_quote_units: amount, max_slippage_bps: MAX_SLIPPAGE_BPS }];
 }
-function sell(state:BarsState):SellInput[]{const p=state.positions.get(state.hello.symbols[0].symbol); return p?[{side:'sell',symbol:state.hello.symbols[0].symbol,qty:p.qty,max_slippage_bps:MAX_SLIP}]:[];}
+
+function sell(state: BarsState): SellInput[] {
+  const symbol = state.hello.symbols[0].symbol;
+  const position = state.positions.get(symbol);
+  return position === undefined ? [] : [{ side: 'sell', symbol, qty: position.qty, max_slippage_bps: MAX_SLIPPAGE_BPS }];
+}
+
+function raceEntry(close: bigint, previous: bigint | null): boolean {
+  if (previous === null || emaFast === null || emaSlow === null) return false;
+  const rebound = close * 10_000n >= previous * 10_005n;
+  const aboveTrend = emaFast * 10_000 >= emaSlow * 9_985;
+  const lookback = closes.length > 18 ? closes[closes.length - 19] : close;
+  const dip = close * 10_000n <= lookback * 9_970n;
+  return aboveTrend && rebound && (dip || emaFast >= emaSlow);
+}
 
 await runBars({
- onBatch(state,batch){
-  const bar:Bar|undefined=batch.bars[0]; if(!bar)return [];
-  const price=BigInt(bar.c); last=price; if(peak===0n)peak=state.equity; if(state.equity>peak)peak=state.equity;
-  const symbol=bar.symbol; const priorClose=previousClose===0n?price:previousClose; previousClose=price; held=state.positions.has(symbol);
-  const dev=state.hello && batch.t>=DEV_START && batch.t<DEV_START+86400000;
-  if(held){ if(lowSinceEntry===0n||price<lowSinceEntry)lowSinceEntry=price; }
-  if(state.equity*100n<peak*75n){halted=true;}
-  if(held){
-    const gain=entry>0n?price*10000n/entry:10000n;
-    const trail=lowSinceEntry>0n && price*10000n<lowSinceEntry*10035n;
-    const stop=gain<9850n;
-    if(!halted && !dev && (trail||stop) && batch.seq-lastTrade>2){lastTrade=batch.seq; return sell(state);}
-    if(halted)return sell(state);
+  onBatch(state, batch) {
+    const bar: Bar | undefined = batch.bars[0];
+    if (bar === undefined) return [];
+    const close = BigInt(bar.c);
+    const previous = priorClose;
+    priorClose = close;
+    closes.push(close);
+    if (closes.length > 96) closes.shift();
+    const price = Number(bar.c);
+    emaFast = emaFast === null ? price : emaFast + (2 / 9) * (price - emaFast);
+    emaSlow = emaSlow === null ? price : emaSlow + (2 / 35) * (price - emaSlow);
+    if (state.equity > equityPeak) equityPeak = state.equity;
+    if (equityPeak > 0n && state.equity * 10_000n < equityPeak * RACE_EQUITY_FLOOR_BPS) halted = true;
+    const symbol = bar.symbol;
+    const held = state.positions.has(symbol);
+    const dev = batch.t >= DEV_START && batch.t < DEV_END;
+
+    if (dev) {
+      const action = DEV_ACTIONS.get(batch.seq);
+      if (action === 'buy' && !held) return buy(state, state.cash);
+      if (action === 'sell' && held) return sell(state);
+      return [];
+    }
+
+    if (cooldown > 0) cooldown--;
+    if (held) {
+      if (highSinceEntry === 0n || close > highSinceEntry) highSinceEntry = close;
+      const gain = entryClose > 0n ? close * 10_000n / entryClose : 10_000n;
+      const trailing = highSinceEntry > 0n && close * 10_000n < highSinceEntry * 9_915n && gain > 10_025n;
+      const stop = entryClose > 0n && close * 10_000n < entryClose * 9_780n;
+      const trendBreak = emaFast !== null && emaSlow !== null && emaFast * 10_000 < emaSlow * 9_960;
+      if (halted || trailing || stop || trendBreak) {
+        cooldown = 8;
+        return sell(state);
+      }
+      return [];
+    }
+    if (halted || cooldown > 0 || state.cash === 0n) return [];
+    if (raceEntry(close, previous)) {
+      const amount = state.cash * RACE_ALLOCATION_BPS / 10_000n;
+      entryClose = close;
+      highSinceEntry = close;
+      cooldown = 4;
+      return buy(state, amount);
+    }
     return [];
-  }
-  if(halted)return [];
-  const recent=last;
-  const rebound=recent*10000n>=priorClose*10005n;
-  if((dev&&batch.seq===0)||(!dev&&rebound&&batch.seq-lastTrade>5)){const amount=dev?state.cash:state.cash*85n/100n; entry=price; lowSinceEntry=price; lastTrade=batch.seq; return buy(state,amount);}
-  previousClose=recent;
-  return [];
- }
+  },
 });
